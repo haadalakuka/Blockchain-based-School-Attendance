@@ -9,6 +9,10 @@ requirements = []
 path = 'contracts/Blockchain-based-School-Attendance.clar'
 clarity_version = 3
 epoch = 3.1
+[contracts.class-teacher-auth]
+path = 'contracts/class-teacher-auth.clar'
+clarity_version = 3
+epoch = 3.1
 [repl.analysis]
 passes = ['check_checker']
 
