@@ -5,6 +5,7 @@
 (define-constant ERR_STUDENT_NOT_ENROLLED (err u104))
 (define-constant ERR_ATTENDANCE_ALREADY_MARKED (err u105))
 (define-constant ERR_INVALID_STATUS (err u106))
+(define-constant ERR_INVALID_TIME (err u107))
 
 (define-data-var contract-owner principal tx-sender)
 (define-data-var school-name (string-ascii 100) "Default School")
@@ -75,6 +76,31 @@
         absent-days: uint,
         late-days: uint,
         attendance-rate: uint,
+    }
+)
+
+(define-map late-arrival-records
+    {
+        student: principal,
+        date: (string-ascii 10),
+        class: (string-ascii 20),
+    }
+    {
+        arrival-time: (string-ascii 5),
+        expected-time: (string-ascii 5),
+        minutes-late: uint,
+        reason: (string-ascii 100),
+    }
+)
+
+(define-map student-tardiness-profile
+    principal
+    {
+        total-late-arrivals: uint,
+        total-minutes-late: uint,
+        average-minutes-late: uint,
+        last-late-date: (string-ascii 10),
+        consecutive-late-days: uint,
     }
 )
 
@@ -220,6 +246,53 @@
     )
 )
 
+(define-public (mark-late-arrival
+        (student principal)
+        (date (string-ascii 10))
+        (class (string-ascii 20))
+        (arrival-time (string-ascii 5))
+        (expected-time (string-ascii 5))
+        (minutes-late uint)
+        (reason (string-ascii 100))
+    )
+    (let (
+            (teacher-info (unwrap! (map-get? teachers tx-sender) ERR_UNAUTHORIZED))
+            (student-info (unwrap! (map-get? students student) ERR_STUDENT_NOT_ENROLLED))
+            (attendance-key {
+                student: student,
+                date: date,
+                class: class,
+            })
+        )
+        (asserts! (get active teacher-info) ERR_UNAUTHORIZED)
+        (asserts! (get active student-info) ERR_STUDENT_NOT_ENROLLED)
+        (asserts! (is-eq (get class student-info) class) ERR_UNAUTHORIZED)
+        (asserts! (> minutes-late u0) ERR_INVALID_TIME)
+        (asserts! (is-none (map-get? attendance-records attendance-key))
+            ERR_ATTENDANCE_ALREADY_MARKED
+        )
+
+        (begin
+            (map-set attendance-records attendance-key {
+                status: "late",
+                marked-by: tx-sender,
+                marked-at: stacks-block-height,
+                notes: reason,
+            })
+            (map-set late-arrival-records attendance-key {
+                arrival-time: arrival-time,
+                expected-time: expected-time,
+                minutes-late: minutes-late,
+                reason: reason,
+            })
+            (unwrap-panic (update-student-stats student "late"))
+            (unwrap-panic (update-tardiness-profile student date minutes-late))
+            (unwrap-panic (update-daily-summary date class))
+            (ok true)
+        )
+    )
+)
+
 (define-private (update-student-stats
         (student principal)
         (status (string-ascii 10))
@@ -330,6 +403,56 @@
             class: class,
             student: student,
         })
+    )
+)
+
+(define-read-only (get-late-arrival-record
+        (student principal)
+        (date (string-ascii 10))
+        (class (string-ascii 20))
+    )
+    (map-get? late-arrival-records {
+        student: student,
+        date: date,
+        class: class,
+    })
+)
+
+(define-read-only (get-tardiness-profile (student principal))
+    (map-get? student-tardiness-profile student)
+)
+
+(define-private (update-tardiness-profile
+        (student principal)
+        (date (string-ascii 10))
+        (minutes-late uint)
+    )
+    (let (
+            (current-profile (default-to {
+                total-late-arrivals: u0,
+                total-minutes-late: u0,
+                average-minutes-late: u0,
+                last-late-date: "",
+                consecutive-late-days: u0,
+            }
+                (map-get? student-tardiness-profile student)
+            ))
+            (new-total-arrivals (+ (get total-late-arrivals current-profile) u1))
+            (new-total-minutes (+ (get total-minutes-late current-profile) minutes-late))
+            (new-average (/ new-total-minutes new-total-arrivals))
+            (is-consecutive (is-eq (get last-late-date current-profile) date))
+            (new-consecutive (if is-consecutive
+                (+ (get consecutive-late-days current-profile) u1)
+                u1
+            ))
+        )
+        (ok (map-set student-tardiness-profile student {
+            total-late-arrivals: new-total-arrivals,
+            total-minutes-late: new-total-minutes,
+            average-minutes-late: new-average,
+            last-late-date: date,
+            consecutive-late-days: new-consecutive,
+        }))
     )
 )
 
